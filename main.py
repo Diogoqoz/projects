@@ -1,36 +1,32 @@
 import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
 # TOKEN vem do Koyeb
 TOKEN = os.environ["BOT_TOKEN"]
-
-# ===== Health check server (porta 8000) =====
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-def start_health_server():
-    port = int(os.environ.get("PORT", 8000))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    server.serve_forever()
 
 # ===== Bot logic =====
 SESSION = []
 PANEL_MESSAGE_ID = None
 
+
 def keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Green", callback_data="GREEN")],
-        [InlineKeyboardButton("❌ Loss", callback_data="LOSS")],
-        [InlineKeyboardButton("📋 Gerar mensagem", callback_data="EXPORT")],
-        [InlineKeyboardButton("🔄 Reiniciar", callback_data="RESET")],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✅ Green", callback_data="GREEN")],
+            [InlineKeyboardButton("❌ Loss", callback_data="LOSS")],
+            [InlineKeyboardButton("📋 Gerar mensagem", callback_data="EXPORT")],
+            [InlineKeyboardButton("🔄 Reiniciar", callback_data="RESET")],
+        ]
+    )
+
 
 def montar_texto(entries, final=False):
     greens = entries.count("✅")
@@ -56,6 +52,7 @@ def montar_texto(entries, final=False):
     linhas = [f"{i}ª Entrada: {v}" for i, v in enumerate(entries, start=1)]
     return topo + "\n".join(linhas)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global PANEL_MESSAGE_ID
     chat_id = update.effective_chat.id
@@ -63,9 +60,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await context.bot.send_message(
         chat_id=chat_id,
         text=montar_texto(SESSION),
-        reply_markup=keyboard()
+        reply_markup=keyboard(),
     )
     PANEL_MESSAGE_ID = msg.message_id
+
 
 async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global PANEL_MESSAGE_ID
@@ -82,7 +80,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "EXPORT":
         await context.bot.send_message(
             chat_id=chat_id,
-            text=montar_texto(SESSION, final=True)
+            text=montar_texto(SESSION, final=True),
         )
 
     if PANEL_MESSAGE_ID:
@@ -90,17 +88,40 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=chat_id,
             message_id=PANEL_MESSAGE_ID,
             text=montar_texto(SESSION),
-            reply_markup=keyboard()
+            reply_markup=keyboard(),
         )
 
+
 def main():
-    # inicia servidor de health check
-    threading.Thread(target=start_health_server, daemon=True).start()
+    """
+    Webhook = o Telegram chama sua URL quando chega mensagem.
+    Isso evita depender do bot "rodando sempre" via polling, o que quebra em hibernação.
+    """
+
+    # Porta que a Koyeb expõe
+    port = int(os.environ.get("PORT", 8000))
+
+    # URL pública do seu app (ex.: https://seu-app.koyeb.app)
+    public_url = os.environ["PUBLIC_URL"].rstrip("/")
+
+    # Caminho do webhook (ex.: telegram) => endpoint final: /telegram
+    path = os.environ.get("WEBHOOK_PATH", "telegram").strip("/")
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(botoes))
-    app.run_polling()
+
+    webhook_url = f"{public_url}/{path}"
+
+    # Inicia servidor HTTP do webhook
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=path,
+        webhook_url=webhook_url,
+        drop_pending_updates=True,  # evita processar backlog antigo ao subir
+    )
+
 
 if __name__ == "__main__":
     main()
